@@ -1,81 +1,99 @@
+# custom error
+class CalculatorError(Exception):
+    pass
+
 class CalculatorModel:
     def __init__(self):
-        # initialise all the state variables
-        self.current_expression = ""
-        self.history_expression = ""
-        self.is_result_displayed = False
-        # define operator precedence for the shunting-yard algorithm
+        # main state variables
+        self.expression = ""
+        self.history = ""
+        self.has_result = False
+        # operator precedence for the shunting-yard algorithm
         self.precedence = {'+': 1, '-': 1, '*': 2, '/': 2, '%': 2}
 
-    def _tokenize(self, expression):
+    # turns the input string into a list of tokens
+    def _tokenize(self, expression_str):
         tokens = []
         i = 0
-        while i < len(expression):
-            char = expression[i]
+        while i < len(expression_str):
+            char = expression_str[i]
 
             if char.isspace():
                 i += 1
                 continue
 
+            # scan for a full number, including decimals
             elif char.isdigit() or char == '.':
-                start_index = i
-                while i < len(expression) and (expression[i].isdigit() or expression[i] == '.'):
+                start = i
+                decimal_found = False
+                while i < len(expression_str) and (expression_str[i].isdigit() or expression_str[i] == '.'):
+                    if expression_str[i] == '.':
+                        if decimal_found:
+                            raise CalculatorError("Invalid number") # catch things like 3.1.4
+                        decimal_found = True
                     i += 1
-                number_str = expression[start_index:i]
+                num_str = expression_str[start:i]
+                
+                # handle implied multiplication like (5)3
                 if tokens and tokens[-1] == ')':
                     tokens.append('*')
-                tokens.append(number_str)
+                tokens.append(num_str)
                 continue
 
+            # handle implied multiplication like 3(5) or (3)(5)
             elif char == '(':
-                if tokens and (tokens[-1].replace('.', '', 1).isdigit() or tokens[-1] == ')'):
+                if tokens and (tokens[-1][-1].isdigit() or tokens[-1] == ')'):
                     tokens.append('*')
                 tokens.append(char)
 
-            elif char in '*/%+-':
+            elif char in self.precedence:
                 tokens.append(char)
             
             elif char == ')':
                 tokens.append(char)
+            
+            else:
+                raise CalculatorError(f"Invalid character: {char}")
 
             i += 1
         return tokens
 
-    def _shunting_yard(self, tokens):
-        output_queue = []
-        operator_stack = []
-
+    # converts infix tokens to Reverse Polish Notation (RPN)
+    def _to_rpn(self, tokens):
+        output = []
+        operators = []
         for token in tokens:
             if token.replace('.', '', 1).isdigit():
-                output_queue.append(token)
+                output.append(token)
             elif token in self.precedence:
-                while (operator_stack and operator_stack[-1] in self.precedence and
-                       self.precedence[operator_stack[-1]] >= self.precedence[token]):
-                    output_queue.append(operator_stack.pop())
-                operator_stack.append(token)
+                while (operators and operators[-1] in self.precedence and
+                       self.precedence[operators[-1]] >= self.precedence[token]):
+                    output.append(operators.pop())
+                operators.append(token)
             elif token == '(':
-                operator_stack.append(token)
+                operators.append(token)
             elif token == ')':
-                while operator_stack and operator_stack[-1] != '(':
-                    output_queue.append(operator_stack.pop())
-                if operator_stack and operator_stack[-1] == '(':
-                    operator_stack.pop() 
+                while operators and operators[-1] != '(':
+                    output.append(operators.pop())
+                if not operators or operators[-1] != '(':
+                    raise CalculatorError("Mismatched parentheses")
+                operators.pop()
 
-        while operator_stack:
-            output_queue.append(operator_stack.pop())
-            
-        return output_queue
+        while operators:
+            if operators[-1] == '(':
+                raise CalculatorError("Mismatched parentheses")
+            output.append(operators.pop())
+        return output
 
-    # this is the final step: evaluating the RPN queue
-    def _evaluate_rpn(self, rpn_queue):
+    # calculates the final result from an RPN queue
+    def _eval_rpn(self, rpn_queue):
         stack = []
         for token in rpn_queue:
             if token.replace('.', '', 1).isdigit():
                 stack.append(float(token))
             elif token in self.precedence:
-                # guard against insufficient operands
                 if len(stack) < 2:
-                    raise ValueError("Invalid expression: insufficient operands for operator")
+                    raise CalculatorError("Missing operand")
                 b = stack.pop()
                 a = stack.pop()
                 if token == '+': result = a + b
@@ -90,55 +108,63 @@ class CalculatorModel:
         if len(stack) == 1:
             return stack[0]
         else:
-            raise ValueError("Invalid expression: operands remain on stack")
+            raise CalculatorError("Invalid syntax")
 
-    def append_to_expression(self, char):
-        if self.is_result_displayed:
+    # adds a character to the expression
+    def append_char(self, char):
+        if self.has_result:
             if char in '%/+-*':
-                self.is_result_displayed = False
+                self.has_result = False
             else:
-                self.current_expression = ""
-                self.is_result_displayed = False
-        self.current_expression += char
+                self.expression = ""
+                self.has_result = False
+        self.expression += char
 
+    # handles backspace
     def backspace(self):
-        if not self.is_result_displayed:
-            self.current_expression = self.current_expression[:-1]
+        if not self.has_result:
+            self.expression = self.expression[:-1]
 
+    # resets the calculator state
     def clear(self):
-        self.current_expression = ""
-        self.history_expression = ""
-        self.is_result_displayed = False
+        self.expression = ""
+        self.history = ""
+        self.has_result = False
 
-    # evaluates the current expression using our full parser
+    # the main evaluation function
     def evaluate(self):
-        if self.is_result_displayed or not self.current_expression:
-            return None
+        if self.has_result or not self.expression:
+            return (None, None) # nothing to do
         
-        self.history_expression = self.current_expression
+        self.history = self.expression
         try:
-            tokens = self._tokenize(self.current_expression)
+            tokens = self._tokenize(self.expression)
             
+            # handle case of a single number being entered
             if len(tokens) == 1 and tokens[0].replace('.', '', 1).isdigit():
-                self.is_result_displayed = True
-                self.current_expression = tokens[0]
-                return tokens[0]
+                self.has_result = True
+                self.expression = tokens[0]
+                return (tokens[0], None)
 
-            rpn_queue = self._shunting_yard(tokens)
-            numeric_total = self._evaluate_rpn(rpn_queue)
+            rpn_queue = self._to_rpn(tokens)
+            total = self._eval_rpn(rpn_queue)
 
-            # format the result to be clean
-            if numeric_total == int(numeric_total): total_str = str(int(numeric_total))
-            else: total_str = str(round(numeric_total, 8))
-            if abs(numeric_total) > 1e12 or (abs(numeric_total) < 1e-6 and numeric_total != 0):
-                total_str = f"{numeric_total:.4g}"
+            # format the result cleanly
+            if total == int(total): total_str = str(int(total))
+            else: total_str = str(round(total, 8))
+            if abs(total) > 1e12 or (abs(total) < 1e-6 and total != 0):
+                total_str = f"{total:.4g}"
             
-            self.current_expression = total_str
-            self.is_result_displayed = True
-            return total_str
+            self.expression = total_str
+            self.has_result = True
+            return (total_str, None)
             
-        except (ValueError, ZeroDivisionError, IndexError):
-            self.current_expression = ""
-            self.is_result_displayed = True
-            return "Error"
+        except CalculatorError as e:
+            self.expression = ""
+            self.has_result = True
+            return (None, str(e))
+        except ZeroDivisionError:
+            self.expression = ""
+            self.has_result = True
+            return (None, "Division by zero")
 
